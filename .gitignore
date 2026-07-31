@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.review-report.json
+.review/cache/
+.claude/
+.DS_Store
+docs/superpowers/
