@@ -103,16 +103,29 @@ marker files at the repo root:
 | Pack | Detected by | Rules | Tier 0 |
 |---|---|---|---|
 | `go` | `go.mod` | SEC-001/002, REL-001/002/003, ARCH-001, TEST-001, PERF-001, STD-001, DOC-001 | `go build`, `go vet`, `gofmt -l`, `go test` — enabled |
+| `laravel` | `artisan` | SEC-001/002/003, ELO-001/002/003/004, ARCH-001, TEST-001, PERF-001, STD-001, DOC-001 | `composer validate`, Pint (skipped if absent), `php artisan test` — enabled; Larastan commented out |
 | `ts` | `package.json`, `tsconfig.json` | SEC-001/002, ARCH-001, TEST-001, STD-001, PERF-001, MAINT-001, DOC-001 | commented out (tooling varies) |
 
 ```bash
-revu init                # detect from the repo
-revu init --lang go      # choose explicitly
+revu init                  # detect from the repo
+revu init --lang go        # choose explicitly
+revu init --lang laravel
 ```
+
+The `laravel` pack replaces the `maintainability` reviewer with **`eloquent`** at
+tier 1, so data-access findings — N+1 queries, mass assignment, raw-query
+injection, irreversible migrations — can block a merge. Filing N+1 under the
+tier-2 `performance` reviewer would make the most common Laravel defect advisory
+only.
 
 Detection returns nothing when no marker is found **or when several match** — an
 ambiguous repo must not silently get a catalog that doesn't apply to it. In that
 case revu falls back to the `ts` pack and the coverage check below tells you.
+
+The one exception is a pack that explicitly outranks another. A Laravel app ships
+`package.json` for its asset pipeline, which would otherwise read as a tie with
+the `ts` pack; `laravel` declares that it beats `ts`, so an `artisan` file
+resolves the repo to Laravel rather than to nothing.
 
 ### The catalog must actually match the repo
 

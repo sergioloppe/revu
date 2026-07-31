@@ -59,6 +59,14 @@ From the root of a git repository you want to review:
 revu init
 ```
 
+`revu init` picks a starter catalog from marker files at the repo root — `go.mod`
+for Go, `artisan` for Laravel, `package.json`/`tsconfig.json` for
+TypeScript — and prints which one it chose. Override it when the guess is wrong:
+
+```bash
+revu init --lang laravel
+```
+
 This scaffolds a `.review/` directory:
 
 ```
