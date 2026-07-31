@@ -9,7 +9,7 @@ import { preflight } from '../executor/preflight.js';
 import { resolveClaudeBin } from '../executor/run.js';
 import { isDismissalActive, readBaseline, readDismissals } from '../suppress.js';
 import { findMissingSkills } from '../skills.js';
-import { EXIT } from '../constants.js';
+import { EXIT, REVU_VERSION } from '../constants.js';
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -148,7 +148,12 @@ export function runDoctor(
   env: NodeJS.ProcessEnv = process.env,
   now: Date = new Date(),
 ): DoctorResult {
-  const checks: DoctorCheck[] = [checkClaudeBinary(env)];
+  // First line, always: a bug report that doesn't say which revu produced it costs a
+  // round trip before anything else can be diagnosed.
+  const checks: DoctorCheck[] = [
+    ok(`revu ${REVU_VERSION} (node ${process.version}, ${process.platform})`),
+    checkClaudeBinary(env),
+  ];
 
   let loaded: LoadedConfig | null = null;
   try {

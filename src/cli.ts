@@ -11,6 +11,7 @@ import { initCommand } from './commands/init.js';
 import { doctorCommand } from './commands/doctor.js';
 import { rulesLintCommand } from './commands/ruleslint.js';
 import { configShowCommand, configPromoteCommand } from './commands/config.js';
+import { languagesCommand } from './commands/languages.js';
 import { appendDismissal, writeBaseline } from './suppress.js';
 import { createReporter, silentReporter } from './progress.js';
 import { LANGUAGES } from './packs.js';
@@ -120,7 +121,7 @@ Managing findings
   revu --dismiss <id> --reason "…" retire one finding
 
 Other commands
-  revu init | doctor | rules lint | config show    (revu <command> --help for detail)
+  revu init | doctor | languages | rules lint | config show  (revu <command> --help for detail)
 
 Exit codes
   0 pass · 1 blocking findings · 2 needs human review · 3 tool error · 4 tier-0 check failed
@@ -229,6 +230,11 @@ program.command('init')
 program.command('doctor')
   .description('run environment, auth, and catalog health checks (exit 3 on any failing check)')
   .action(() => { process.exitCode = doctorCommand(findRepoRoot(process.cwd())); });
+
+program.command('languages')
+  .description('list the rule packs `revu init --lang` accepts, and which one this repo looks like')
+  .option('--json', 'emit the list as JSON')
+  .action((opts) => { process.exitCode = languagesCommand(process.cwd(), { json: opts.json }); });
 
 const rules = program.command('rules').description('rule catalog utilities');
 rules.command('lint')

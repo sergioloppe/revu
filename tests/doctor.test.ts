@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runDoctor, doctorCommand } from '../src/commands/doctor.js';
 import { appendDismissal, writeBaseline } from '../src/suppress.js';
+import { REVU_VERSION } from '../src/constants.js';
 
 const SHIM = resolve('tests/fixtures/fake-claude.mjs');
 
@@ -40,10 +41,18 @@ describe('runDoctor', () => {
     expect(checks.find((c) => c.message.includes('no baseline'))).toBeTruthy();
   });
 
+  it('reports revu\'s own version first, so a bug report identifies the build', () => {
+    repoConfig();
+    const { checks } = runDoctor(repoRoot, baseEnv());
+    expect(checks[0]).toMatchObject({ status: 'ok' });
+    expect(checks[0]!.message).toContain(`revu ${REVU_VERSION}`);
+    expect(checks[0]!.message).toContain(process.version);
+  });
+
   it('fails the claude binary check (but tolerates the absence) when the binary is missing', () => {
     repoConfig();
     const { checks, exitCode } = runDoctor(repoRoot, { ...baseEnv(), REVU_CLAUDE_BIN: '/nonexistent/claude' });
-    expect(checks[0]).toMatchObject({ status: 'fail' });
+    expect(checks.find((c) => c.message.includes('claude binary'))).toMatchObject({ status: 'fail' });
     expect(exitCode).toBe(3);
   });
 

@@ -1,5 +1,9 @@
 # revu
 
+[![version](https://img.shields.io/github/package-json/v/sergioloppe/revu?label=version&color=blue)](https://github.com/sergioloppe/revu/releases)
+[![node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 A local-first, multi-reviewer AI code review pipeline built on Claude Code.
 `revu` runs a committee of specialist reviewers (`claude -p` subprocesses)
 against your diff, each scoped to a narrow rule catalog, and turns their
@@ -107,10 +111,15 @@ marker files at the repo root:
 | `ts` | `package.json`, `tsconfig.json` | SEC-001/002, ARCH-001, TEST-001, STD-001, PERF-001, MAINT-001, DOC-001 | commented out (tooling varies) |
 
 ```bash
+revu languages             # list the packs --lang accepts, and what this repo looks like
 revu init                  # detect from the repo
 revu init --lang go        # choose explicitly
 revu init --lang laravel
 ```
+
+`revu languages` prints the table above straight from the pack registry, so it is
+always current for the version you have installed; `revu languages --json` emits
+`{ "languages": [...], "detected": "ts" }` for scripting.
 
 The `laravel` pack replaces the `maintainability` reviewer with **`eloquent`** at
 tier 1, so data-access findings — N+1 queries, mass assignment, raw-query
@@ -272,7 +281,9 @@ scripts.
 |---|---|
 | `revu` | Review the diff (default: merge-base with `origin/main`/`main` vs `HEAD`). Writes `.review-report.json`. |
 | `revu init [--global] [--claude]` | Scaffold `.review/` (or `~/.config/revu/` with `--global`); `--claude` also writes the `/revu`, `/revu-rule`, `/revu-triage` Claude Code commands. |
-| `revu doctor` | Environment/auth/catalog health checks. Exit 0 (ok) or 3 (problems); warnings never fail it. |
+| `revu doctor` | Environment/auth/catalog health checks, starting with the running `revu` version. Exit 0 (ok) or 3 (problems); warnings never fail it. |
+| `revu languages [--json]` | List the rule packs `init --lang` accepts, with their detection markers and the one detected here. Always exit 0. |
+| `revu --version` | Print the installed version (the same string stamped into every report envelope). |
 | `revu rules lint` | Frontmatter validation + duplicate-id checks only (subset of `doctor`). |
 | `revu config show --effective` | Print the merged config as YAML with a layer-provenance header. |
 | `revu config promote <RULE-ID>` | Copy a global rule into `.review/rules/<domain>/`, taking local (blocking-eligible) ownership. |
