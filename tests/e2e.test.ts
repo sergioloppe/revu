@@ -211,7 +211,7 @@ describe('revu CLI tier 0', () => {
       expect(res.code).toBe(4);
       expect(res.stderr).toContain('tier 0 check "precheck"');
       const envelope = JSON.parse(readFileSync(join(trepo.root, '.review-report.json'), 'utf8'));
-      expect(envelope.tier_0).toEqual({ status: 'FAIL', checks: [{ id: 'precheck', status: 'FAIL', duration_ms: expect.any(Number) }] });
+      expect(envelope.tier_0).toEqual({ status: 'FAIL', checks: [{ id: 'precheck', status: 'FAIL', blocking: true, duration_ms: expect.any(Number) }] });
       expect(envelope.reviews).toEqual([]);
     } finally { trepo.cleanup(); }
   });
@@ -245,7 +245,7 @@ describe('revu CLI tier 0', () => {
       expect(res.code).toBe(0);
       const envelope = JSON.parse(readFileSync(join(trepo.root, '.review-report.json'), 'utf8'));
       expect(envelope.reviews).toEqual([]);
-      expect(envelope.tier_0).toEqual({ status: 'PASS', checks: [{ id: 'precheck', status: 'PASS', duration_ms: expect.any(Number) }] });
+      expect(envelope.tier_0).toEqual({ status: 'PASS', checks: [{ id: 'precheck', status: 'PASS', blocking: true, duration_ms: expect.any(Number) }] });
     } finally { trepo.cleanup(); }
   });
 });

@@ -88,6 +88,22 @@ git add .review lefthook.yml
 git commit -m "add revu"
 ```
 
+That includes `.review/baseline.json` and `.review/dismissals.yaml` once they
+exist: a baseline only stops CI re-reporting findings you have already accepted
+if CI can see it, and a dismissal's `approved_by`/`expires` is an audit trail
+worth nothing unless it is shared.
+
+Add one line to your **root** `.gitignore` — the per-run report is the only
+generated file that lands outside `.review/`:
+
+```gitignore
+# revu — generated output
+.review-report.json
+```
+
+The review cache needs no rule of its own; the `.gitignore` above (written
+inside `.review/`) already excludes it.
+
 Optionally install the Claude Code slash commands (`/revu`, `/revu-rule`,
 `/revu-triage`) into this repo's `.claude/`:
 

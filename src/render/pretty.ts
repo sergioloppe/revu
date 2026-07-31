@@ -14,10 +14,18 @@ export function renderPretty(envelope: AggregateEnvelope, useColor: boolean): st
   lines.push('');
   if (envelope.tier_0) {
     const t0 = envelope.tier_0;
-    const t0Color: Code = t0.status === 'FAIL' ? 'red' : 'green';
-    lines.push(c('bold', c(t0Color, `tier 0: ${t0.status}`)) + c('dim', ` (${t0.checks.length} check(s))`));
+    // An advisory-only failure is neither green nor a hard FAIL: colouring it red would
+    // say the run was gated when it wasn't, green would hide that a check went red.
+    const advisory = t0.checks.filter((ch) => ch.status !== 'PASS' && !ch.blocking);
+    const t0Color: Code = t0.status === 'FAIL' ? 'red' : advisory.length ? 'yellow' : 'green';
+    const suffix = advisory.length && t0.status !== 'FAIL'
+      ? ` (${t0.checks.length} check(s), ${advisory.length} non-blocking failure(s))`
+      : ` (${t0.checks.length} check(s))`;
+    lines.push(c('bold', c(t0Color, `tier 0: ${t0.status}`)) + c('dim', suffix));
     for (const check of t0.checks) {
-      lines.push(`  ${check.id}: ${check.status} (${check.duration_ms}ms)`);
+      const note = check.status !== 'PASS' && !check.blocking ? ' — non-blocking' : '';
+      const line = `  ${check.id}: ${check.status}${note} (${check.duration_ms}ms)`;
+      lines.push(check.status === 'PASS' ? line : c(check.blocking ? 'red' : 'yellow', line));
     }
     lines.push('');
   }

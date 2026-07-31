@@ -71,13 +71,13 @@ describe('runPipeline tier 0', () => {
 
     const { envelope, exitCode } = await runPipeline(repo.root, {}, env('pass', { FAKE_MARKER_FILE: markerFile }));
 
-    expect(envelope.tier_0).toEqual({ status: 'PASS', checks: [{ id: 'lint', status: 'PASS', duration_ms: expect.any(Number) }] });
+    expect(envelope.tier_0).toEqual({ status: 'PASS', checks: [{ id: 'lint', status: 'PASS', blocking: true, duration_ms: expect.any(Number) }] });
     expect(envelope.reviews).toHaveLength(1);
     expect(exitCode).toBe(EXIT.PASS);
     expect(reviewerStarted()).toBe(true);
   });
 
-  it('fail-fast path: a failing tier-0 check exits 4 and spawns zero reviewers', async () => {
+  it('a failing blocking tier-0 check exits 4 and spawns zero reviewers', async () => {
     setupReviewDir(repo.root, tiersBlock('      - id: lint', '        command: exit 1'));
     repo.commitAll('add review config');
     repo.branch('feature');
@@ -89,14 +89,91 @@ describe('runPipeline tier 0', () => {
     expect(exitCode).toBe(EXIT.TIER0);
     expect(envelope.status).toBe('FAIL');
     expect(envelope.decision_reason).toBe('tier 0 check lint failed');
-    expect(envelope.tier_0).toEqual({ status: 'FAIL', checks: [{ id: 'lint', status: 'FAIL', duration_ms: expect.any(Number) }] });
+    expect(envelope.tier_0).toEqual({ status: 'FAIL', checks: [{ id: 'lint', status: 'FAIL', blocking: true, duration_ms: expect.any(Number) }] });
     expect(envelope.reviews).toEqual([]);
     expect(reviewerStarted()).toBe(false); // zero reviewer spend
     expect(errSpy).toHaveBeenCalled(); // the check's raw output is surfaced to the user
     errSpy.mockRestore();
   });
 
-  it('fail-fast path stops before later tier-0 checks', async () => {
+  it('an empty diff stops before tier 0 — the checks never run at all', async () => {
+    // The whole point of resolving the diff first: a repo whose formatter takes 98s
+    // must not pay that to be told there was nothing to review.
+    const ranFile = join(scratchDir, 'tier0-ran');
+    setupReviewDir(repo.root, tiersBlock(
+      '      - id: lint', `        command: touch ${ranFile}`,
+    ));
+    repo.commitAll('add review config');
+
+    // Working tree clean → `--working` selects an empty diff.
+    await expect(runPipeline(repo.root, { working: true }, env('pass'))).rejects.toThrow(
+      /nothing to review/);
+    expect(existsSync(ranFile)).toBe(false);
+  });
+
+  it('a failing non-blocking check is reported but the review still runs', async () => {
+    setupReviewDir(repo.root, tiersBlock(
+      '      - id: composer-validate', '        command: exit 1', '        blocking: false',
+    ));
+    repo.commitAll('add review config');
+    repo.branch('feature');
+    repo.commit('src/a.ts', 'const x = 2;\n', 'benign change');
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { envelope, exitCode } = await runPipeline(
+      repo.root, {}, env('pass', { FAKE_MARKER_FILE: markerFile }));
+    expect(errSpy).toHaveBeenCalled(); // assert before mockRestore clears the history
+    errSpy.mockRestore();
+
+    // The whole point: red check, review proceeds, exit code untouched by it.
+    expect(exitCode).toBe(EXIT.PASS);
+    expect(reviewerStarted()).toBe(true);
+    expect(envelope.tier_0).toEqual({
+      status: 'PASS',
+      checks: [{ id: 'composer-validate', status: 'FAIL', blocking: false, duration_ms: expect.any(Number) }],
+    });
+    // A PASS must still say a check went red, or the failure is invisible.
+    expect(envelope.decision_reason).toContain('non-blocking tier-0 check(s) failed: composer-validate');
+  });
+
+  it('a blocking failure still gates even when an advisory check also failed', async () => {
+    setupReviewDir(repo.root, tiersBlock(
+      '      - id: hygiene', '        command: exit 1', '        blocking: false',
+      '      - id: build', '        command: exit 1',
+    ));
+    repo.commitAll('add review config');
+    repo.branch('feature');
+    repo.commit('src/a.ts', 'const x = 2;\n', 'benign change');
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { envelope, exitCode } = await runPipeline(
+      repo.root, {}, env('pass', { FAKE_MARKER_FILE: markerFile }));
+    errSpy.mockRestore();
+
+    expect(exitCode).toBe(EXIT.TIER0);
+    expect(reviewerStarted()).toBe(false);
+    expect(envelope.decision_reason).toBe('tier 0 check build failed');
+    expect(envelope.tier_0!.checks.map((c) => c.id)).toEqual(['hygiene', 'build']);
+  });
+
+  it('names every blocking failure when more than one gates', async () => {
+    setupReviewDir(repo.root, tiersBlock(
+      '      - id: build', '        command: exit 1',
+      '      - id: test', '        command: exit 1',
+    ));
+    repo.commitAll('add review config');
+    repo.branch('feature');
+    repo.commit('src/a.ts', 'const x = 2;\n', 'benign change');
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { envelope, exitCode } = await runPipeline(repo.root, {}, env('pass'));
+    errSpy.mockRestore();
+
+    expect(exitCode).toBe(EXIT.TIER0);
+    expect(envelope.decision_reason).toBe('tier 0 checks failed: build, test');
+  });
+
+  it('runs later tier-0 checks even after one fails', async () => {
     setupReviewDir(repo.root, tiersBlock(
       '      - id: first', '        command: exit 1',
       '      - id: second', '        command: exit 0',
@@ -109,7 +186,7 @@ describe('runPipeline tier 0', () => {
     const { envelope } = await runPipeline(repo.root, {}, env('pass'));
     errSpy.mockRestore();
 
-    expect(envelope.tier_0!.checks.map((c) => c.id)).toEqual(['first']);
+    expect(envelope.tier_0!.checks.map((c) => c.id)).toEqual(['first', 'second']);
   });
 
   it('timeout path: a check exceeding its timeout is TIMEOUT and still exits 4', async () => {
@@ -140,7 +217,7 @@ describe('runPipeline tier 0', () => {
     expect(exitCode).toBe(EXIT.PASS);
     expect(envelope.status).toBe('PASS');
     expect(envelope.reviews).toEqual([]);
-    expect(envelope.tier_0).toEqual({ status: 'PASS', checks: [{ id: 'lint', status: 'PASS', duration_ms: expect.any(Number) }] });
+    expect(envelope.tier_0).toEqual({ status: 'PASS', checks: [{ id: 'lint', status: 'PASS', blocking: true, duration_ms: expect.any(Number) }] });
     expect(reviewerStarted()).toBe(false);
   });
 

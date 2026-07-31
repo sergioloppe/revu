@@ -99,6 +99,40 @@ stdout, so `revu --format json > out.json` stays clean. `-q` silences progress.
 Everything `revu init` scaffolds is `status: proposed`, non-blocking. Rules
 earn `blocking: true` deliberately, once you trust them on real diffs.
 
+## What to commit
+
+`.review/` is **shared configuration, not local scratch** — commit it and review
+it like code. Its rules, reviewer personas, and `config.yaml` are the `repo`
+layer of the config cascade, so a teammate or CI runner without them falls back
+to the builtin layer alone and reviews almost nothing:
+
+```bash
+git add .review lefthook.yml
+git commit -m "add revu"
+```
+
+Only one generated file belongs in your root `.gitignore`:
+
+```gitignore
+# revu — generated output
+.review-report.json
+```
+
+`revu init` writes a `.gitignore` *inside* `.review/` containing `cache/`, so the
+review cache is already excluded — you don't need a second rule for it.
+
+Two files there look generated but are not, and should be committed:
+
+| File | Why it belongs in git |
+|---|---|
+| `.review/baseline.json` | The set of findings your team has accepted. Machine-local, and CI re-fails everything the baseline was meant to retire. |
+| `.review/dismissals.yaml` | Each entry carries `approved_by` and `expires` — an audit trail only worth having if it is shared and reviewable. |
+
+Ignoring all of `.review/` is the one configuration that fails silently: runs
+still exit 0, because a reviewer with no applicable rules has nothing to report.
+`revu doctor` is built to catch exactly this and will tell you when a catalog
+matches nothing in the repo.
+
 ## Rule packs
 
 `revu init` installs a starter catalog for the repo's language, detected from
@@ -327,9 +361,12 @@ scripts.
   fan-out and checked after each reviewer so concurrency can't hide a
   mutation. Reports are collected in config order regardless of completion
   order.
-- **Tier 0** — sequential, fail-fast deterministic checks (lint, typecheck,
-  ...) declared in `config.yaml`'s `tiers."0".checks`; a failure exits 4
-  before any reviewer runs.
+- **Tier 0** — sequential deterministic checks (lint, typecheck, ...) declared
+  in `config.yaml`'s `tiers."0".checks`. Every check runs, so one run reports
+  every problem. A failing `blocking: true` check (the default) exits 4 before
+  any reviewer runs; a failing `blocking: false` check is reported in the
+  envelope and the decision reason, and the review proceeds. Tier 0 runs only
+  once the diff is known to be non-empty — nothing to review costs nothing.
 - **Review cache** — keyed on reviewer + model + ruleset hash + diff hash,
   under `.review/cache/reviews/`. A hit skips the subprocess entirely
   (`cached: true` on the envelope); `NEEDS_HUMAN_REVIEW` results are never

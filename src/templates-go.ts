@@ -19,9 +19,13 @@ auth:
   mode: auto
 
 # Tier 0: deterministic pre-checks that run before any reviewer spends a token.
-# Sequential, fail-fast — the first non-zero exit (or timeout) fails the whole run
-# with exit code 4 and no reviewer is spawned. Add a linter here once you have one
-# configured (e.g. golangci-lint run).
+# Every check runs (no fail-fast), so one run reports the complete picture. Add a
+# linter here once you have one configured (e.g. golangci-lint run).
+#
+# blocking: true (the default) means a failure fails the whole run with exit code 4
+# and no reviewer is spawned. blocking: false reports the failure and continues.
+# build/vet/test gate because a failure there means the tree is genuinely broken;
+# formatting does not.
 tiers:
   "0":
     checks:
@@ -34,10 +38,14 @@ tiers:
       # Prints the offending files before failing. The terser
       # \`test -z "$(gofmt -l .)"\` idiom swallows the file list into the command
       # substitution and fails with no output at all, which tells you nothing.
+      # Non-blocking: unformatted code is worth saying out loud, but it is not a reason
+      # to refuse to review the diff — and \`gofmt -l .\` reports pre-existing files the
+      # change never touched.
       - id: fmt
         command: >-
           out=$(gofmt -l .); [ -z "$out" ] ||
           { echo "gofmt: these files need formatting (run: gofmt -w .)"; echo "$out"; exit 1; }
+        blocking: false
         timeout_seconds: 60
       - id: test
         command: go test ./...

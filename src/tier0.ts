@@ -4,6 +4,9 @@ import type { Tier0Check } from './config/schema.js';
 export interface Tier0CheckOutcome {
   id: string;
   status: 'PASS' | 'FAIL' | 'TIMEOUT';
+  /** Whether failing this check gates the run. Carried through so every consumer
+   * (envelope, renderer, progress) can tell a gate from a note without re-reading config. */
+  blocking: boolean;
   duration_ms: number;
   /** Combined stdout+stderr, for surfacing to the user on failure. Not part of the envelope. */
   output: string;
@@ -19,8 +22,33 @@ export interface Tier0CheckOutcome {
 }
 
 export interface Tier0RunResult {
+  /** FAIL iff a *blocking* check failed. Advisory failures leave this PASS. */
   status: 'PASS' | 'FAIL';
   checks: Tier0CheckOutcome[];
+}
+
+/** Checks that did not pass and gate the run. Non-empty means exit 4, no reviewers. */
+export function blockingFailures(result: Tier0RunResult): Tier0CheckOutcome[] {
+  return result.checks.filter((c) => c.status !== 'PASS' && c.blocking);
+}
+
+/** Checks that did not pass but only report. Non-empty is surfaced, never fatal. */
+export function advisoryFailures(result: Tier0RunResult): Tier0CheckOutcome[] {
+  return result.checks.filter((c) => c.status !== 'PASS' && !c.blocking);
+}
+
+/**
+ * Resolves a check's gating, defaulting to blocking when the field is absent.
+ *
+ * The zod schema already defaults it to true, but that only applies to configs that
+ * went through a parse — a Tier0Check built directly (a library caller, a test) has
+ * `blocking: undefined`, and reading that field raw would silently treat it as
+ * advisory. Defaulting here rather than at the field makes the failure mode
+ * fail-closed: an unspecified check gates, and no config can lose its gate by
+ * accident.
+ */
+function isBlocking(check: Tier0Check): boolean {
+  return check.blocking ?? true;
 }
 
 function runCheck(check: Tier0Check, repoRoot: string, defaultTimeoutSeconds: number): Promise<Tier0CheckOutcome> {
@@ -53,6 +81,7 @@ function runCheck(check: Tier0Check, repoRoot: string, defaultTimeoutSeconds: nu
       resolvePromise({
         id: check.id,
         status: timedOut ? 'TIMEOUT' : code === 0 ? 'PASS' : 'FAIL',
+        blocking: isBlocking(check),
         duration_ms: Date.now() - started,
         output,
         command: check.command,
@@ -62,7 +91,7 @@ function runCheck(check: Tier0Check, repoRoot: string, defaultTimeoutSeconds: nu
     child.on('error', (err) => {
       clearTimeout(timer);
       resolvePromise({
-        id: check.id, status: 'FAIL', duration_ms: Date.now() - started,
+        id: check.id, status: 'FAIL', blocking: isBlocking(check), duration_ms: Date.now() - started,
         output: output + String(err),
         command: check.command, exit_code: null,
       });
@@ -71,9 +100,14 @@ function runCheck(check: Tier0Check, repoRoot: string, defaultTimeoutSeconds: nu
 }
 
 /**
- * Runs tier-0 checks sequentially, stopping at the first non-PASS result (fail-fast):
- * deterministic checks are cheap and ordered by the user, so there is no reason to
- * pay for later checks once an earlier one has already failed the run.
+ * Runs every tier-0 check sequentially. Deliberately NOT fail-fast: an earlier
+ * version stopped at the first non-PASS, so a repo with a failing hygiene check
+ * never learned whether its build or tests passed either — you fixed one thing,
+ * re-ran, and met the next. Checks are deterministic and comparatively cheap, so
+ * one run reports the complete picture.
+ *
+ * `status` reflects blocking checks only. An advisory check that fails is recorded
+ * in `checks` for the caller to surface, but does not fail the run.
  */
 export async function runTier0(
   checks: Tier0Check[],
@@ -86,7 +120,7 @@ export async function runTier0(
     const outcome = await runCheck(check, repoRoot, defaultTimeoutSeconds);
     outcomes.push(outcome);
     onCheck?.(outcome);
-    if (outcome.status !== 'PASS') return { status: 'FAIL', checks: outcomes };
   }
-  return { status: 'PASS', checks: outcomes };
+  const result: Tier0RunResult = { status: 'PASS', checks: outcomes };
+  return blockingFailures(result).length ? { ...result, status: 'FAIL' } : result;
 }

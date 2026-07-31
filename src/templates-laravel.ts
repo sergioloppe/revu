@@ -10,6 +10,11 @@
  * guarded, and the absent one ships commented out — the alternative is a first run that
  * dies at tier 0 with exit 4 before a single reviewer starts, which reads as a broken
  * tool rather than a strict one.
+ *
+ * Guarding the *presence* of a tool turned out not to be enough: `composer validate`
+ * and Pint are both present and both routinely fail on pre-existing conditions that say
+ * nothing about the diff. They ship `blocking: false` so they report without gating.
+ * Only `php artisan test` — where a failure means the tree is actually broken — gates.
  */
 
 export const LARAVEL_CONFIG_YAML = `schema_version: 1
@@ -24,13 +29,24 @@ auth:
   mode: auto
 
 # Tier 0: deterministic pre-checks that run before any reviewer spends a token.
-# Sequential, fail-fast — the first non-zero exit (or timeout) fails the whole run
-# with exit code 4 and no reviewer is spawned.
+# Every check runs (no fail-fast), so one run reports the complete picture.
+#
+# blocking: true (the default) means a failure fails the whole run with exit code 4
+# and no reviewer is spawned. blocking: false reports the failure and continues —
+# right for checks whose failure says nothing about whether the *diff* is worth
+# reviewing.
 tiers:
   "0":
     checks:
+      # Non-blocking, and NOT --strict. \`composer validate --strict\` exits non-zero on
+      # warnings as well as errors, and the warnings it raises ("unbound version
+      # constraint", a duplicate key) are pre-existing repo hygiene that has nothing to
+      # do with the diff under review. Gating an entire AI review on them means a
+      # mature application can never get reviewed at all. Schema errors still surface.
+      # Publishing a package rather than running an app? Add --strict back.
       - id: composer-validate
-        command: composer validate --strict
+        command: composer validate
+        blocking: false
         timeout_seconds: 60
       # Pint ships with the default skeleton but not with apps upgraded from older
       # releases. The guard makes a missing binary a skip instead of a hard failure,
@@ -40,6 +56,7 @@ tiers:
         command: >-
           [ -x vendor/bin/pint ] && vendor/bin/pint --test ||
           echo "pint not installed — skipping format check"
+        blocking: false
         timeout_seconds: 120
       - id: test
         command: php artisan test

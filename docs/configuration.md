@@ -54,8 +54,10 @@ auth:
   mode: auto                    # auto | subscription | api_key
   # max_cost_usd_per_run: 1.50  # hard stop, ENFORCED only in api_key mode
 
-# Tier 0: deterministic pre-checks, sequential and fail-fast. The first non-zero
-# exit (or timeout) fails the run with exit 4 before any reviewer is spawned.
+# Tier 0: deterministic pre-checks, run sequentially. Every check runs — a failure
+# does not stop the ones after it. A failing `blocking: true` check (the default)
+# fails the run with exit 4 before any reviewer is spawned; a failing
+# `blocking: false` check is reported and the review continues.
 # tiers:
 #   "0":
 #     checks:
@@ -64,6 +66,7 @@ auth:
 #         timeout_seconds: 120
 #       - id: lint
 #         command: npx eslint .
+#         blocking: false       # reported, never gates
 
 reviewers:
   - id: security

@@ -14,9 +14,12 @@ const sha = (s: string) => `sha256:${createHash('sha256').update(s).digest('hex'
 export interface Tier0EnvelopeCheck {
   id: string;
   status: 'PASS' | 'FAIL' | 'TIMEOUT';
+  /** False means a failure here was reported but did not gate the run. */
+  blocking: boolean;
   duration_ms: number;
 }
 export interface Tier0Envelope {
+  /** FAIL iff a blocking check failed; advisory failures leave this PASS. */
   status: 'PASS' | 'FAIL';
   checks: Tier0EnvelopeCheck[];
 }

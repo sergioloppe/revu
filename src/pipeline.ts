@@ -14,7 +14,10 @@ import { validateReviewerOutput } from './report/validate.js';
 import { aggregate } from './aggregate/aggregate.js';
 import { buildEnvelope, type AggregateEnvelope, type Tier0Envelope } from './report/envelope.js';
 import { runPool } from './util/pool.js';
-import { runTier0, type Tier0RunResult } from './tier0.js';
+import {
+  advisoryFailures, blockingFailures, runTier0,
+  type Tier0CheckOutcome, type Tier0RunResult,
+} from './tier0.js';
 import { cacheKey, readCache, writeCache } from './cache.js';
 import { readBaseline, readDismissals, suppressFindings } from './suppress.js';
 import { resolveSkillsForReviewer } from './skills.js';
@@ -52,11 +55,25 @@ export interface PipelineOpts {
   reporter?: Reporter;
 }
 
+/**
+ * Appends a note naming the non-gating tier-0 checks that failed.
+ *
+ * A run whose only red is advisory still exits 0 — that is what non-blocking means —
+ * so the reason string is the one place a reader is guaranteed to see it. Silence
+ * here would make "PASS" indistinguishable from a run where everything was green.
+ */
+function withAdvisoryNote(reason: string, advisory: Tier0CheckOutcome[]): string {
+  if (advisory.length === 0) return reason;
+  return `${reason} (${advisory.length} non-blocking tier-0 check(s) failed: ` +
+    `${advisory.map((c) => c.id).join(', ')})`;
+}
+
 /** Envelope's typed check summary, stripped of the raw stdout/stderr `output`. */
 function toEnvelopeTier0(result: Tier0RunResult): Tier0Envelope {
   return {
     status: result.status,
-    checks: result.checks.map(({ id, status, duration_ms }) => ({ id, status, duration_ms })),
+    checks: result.checks.map(({ id, status, blocking, duration_ms }) =>
+      ({ id, status, blocking, duration_ms })),
   };
 }
 
@@ -71,6 +88,15 @@ export async function runPipeline(
   reporter.runStart(REVU_VERSION, repoRoot);
   const loaded = loadEffectiveConfig(repoRoot, env);
 
+  // The diff is resolved before anything else runs. It is pure git — no subprocess
+  // spend, no `claude` on PATH — and an empty one means there is nothing for the rest
+  // of the pipeline to act on. Resolving it first is what makes "nothing to review"
+  // cost nothing: tier 0 does not run, so a repo whose formatter takes 98s and whose
+  // test suite is red does not pay either price to be told its diff was empty.
+  // computeDiff throws a ToolError carrying the full "here is what your tree actually
+  // holds, try one of these" message.
+  const diff = computeDiff(repoRoot, opts);
+
   // Tier 0: deterministic checks (lint, typecheck, ...) run first, before any Claude
   // spend — no preflight, no diff computation, no reviewer selection. A failure short
   // -circuits the whole run with exit 4. Uses detectAuthMode (no subprocess) rather
@@ -78,36 +104,48 @@ export async function runPipeline(
   const skipTiers = new Set<number>(opts.skipTiers ?? []);
   const tier0Checks = loaded.config.tiers['0']?.checks ?? [];
   let tier0Result: Tier0RunResult | null = null;
+  /** Non-gating checks that failed. Folded into the final decision_reason so a PASS
+   * never hides the fact that a check went red. */
+  let tier0Advisory: Tier0CheckOutcome[] = [];
   if (tier0Checks.length > 0 && skipTiers.has(0)) {
     reporter.tierSkipped(0, `${tier0Checks.length} deterministic check(s)`);
   } else if (tier0Checks.length > 0) {
     reporter.tier0Start(tier0Checks.length);
     tier0Result = await runTier0(tier0Checks, repoRoot, loaded.config.defaults.timeout_seconds,
       (outcome) => reporter.tier0Check(outcome));
-    if (tier0Result.status === 'FAIL') {
-      const failedCheck = tier0Result.checks[tier0Result.checks.length - 1]!;
-      // The raw command output isn't part of the (structured) envelope; surface it here.
-      // A check is under no obligation to explain itself — `test -z "$(gofmt -l ...)"`
-      // fails with entirely empty output — so always print the command that ran, and
-      // say plainly when there was no output rather than trailing off into a blank line.
-      const detail = failedCheck.output.trim()
-        ? `\n${failedCheck.output.trimEnd()}`
+    // Every failure gets reported, blocking or not. The raw command output isn't part
+    // of the (structured) envelope; surface it here. A check is under no obligation to
+    // explain itself — `test -z "$(gofmt -l ...)"` fails with entirely empty output —
+    // so always print the command that ran, and say plainly when there was no output
+    // rather than trailing off into a blank line.
+    const describeFailure = (check: Tier0CheckOutcome): string => {
+      const detail = check.output.trim()
+        ? `\n${check.output.trimEnd()}`
         : '\n  (the command produced no output — run it yourself to see why it failed)';
-      const how = failedCheck.status === 'TIMEOUT'
-        ? `timed out after ${Math.round(failedCheck.duration_ms / 1000)}s`
-        : `exited ${failedCheck.exit_code}`;
-      console.error(
-        `revu: tier 0 check "${failedCheck.id}" ${failedCheck.status} (${how})\n` +
-        `  command: ${failedCheck.command}${detail}`);
+      const how = check.status === 'TIMEOUT'
+        ? `timed out after ${Math.round(check.duration_ms / 1000)}s`
+        : `exited ${check.exit_code}`;
+      return `revu: tier 0 check "${check.id}" ${check.status} (${how})\n` +
+        `  command: ${check.command}${detail}`;
+    };
+    const blocking = blockingFailures(tier0Result);
+    tier0Advisory = advisoryFailures(tier0Result);
+    for (const check of [...blocking, ...tier0Advisory]) {
+      console.error(check.blocking
+        ? describeFailure(check)
+        : `${describeFailure(check)}\n  (non-blocking — reported, but the review continues)`);
+    }
+
+    if (blocking.length > 0) {
       const head = git(repoRoot, ['rev-parse', 'HEAD']);
+      const reason = blocking.length === 1
+        ? `tier 0 check ${blocking[0]!.id} failed`
+        : `tier 0 checks failed: ${blocking.map((c) => c.id).join(', ')}`;
       const envelope = buildEnvelope({
         repoRoot, commit: head, base: head,
         config: loaded.config, layers: loaded.layers, authMode: detectAuthMode(env),
         rules: [], reports: [],
-        result: {
-          status: 'FAIL', decision_reason: `tier 0 check ${failedCheck.id} failed`,
-          exitCode: EXIT.TIER0, demoted: [],
-        },
+        result: { status: 'FAIL', decision_reason: reason, exitCode: EXIT.TIER0, demoted: [] },
         costUsd: null, durationMs: Date.now() - started,
         tier0: toEnvelopeTier0(tier0Result), skippedTiers: [...skipTiers],
       });
@@ -121,7 +159,14 @@ export async function runPipeline(
       repoRoot, commit: head, base: head,
       config: loaded.config, layers: loaded.layers, authMode: detectAuthMode(env),
       rules: [], reports: [],
-      result: { status: 'PASS', decision_reason: 'tier 0 checks passed', exitCode: EXIT.PASS, demoted: [] },
+      result: {
+        status: 'PASS',
+        // "checks passed" would contradict the note appended right after it.
+        decision_reason: withAdvisoryNote(
+          tier0Advisory.length ? 'tier 0 gating checks passed' : 'tier 0 checks passed',
+          tier0Advisory),
+        exitCode: EXIT.PASS, demoted: [],
+      },
       costUsd: null, durationMs: Date.now() - started,
       tier0: tier0Result ? toEnvelopeTier0(tier0Result) : null,
       skippedTiers: [...skipTiers],
@@ -129,10 +174,14 @@ export async function runPipeline(
     return { envelope, exitCode: EXIT.PASS };
   }
 
+  // Preflight stays *after* tier 0 so a failing deterministic check never requires
+  // `claude` to be installed at all.
   const claudeBin = resolveClaudeBin(env);
   const { authMode } = preflight(claudeBin, env);
-  const diff = computeDiff(repoRoot, opts);
-  reporter.diff({ mode: diff.mode, base: diff.base, head: diff.head, files: diff.files.length });
+  reporter.diff({
+    mode: diff.mode, base: diff.base, head: diff.head,
+    files: diff.files.length, paths: diff.files,
+  });
   reporter.excluded(diff.excluded);
 
   const ruleSources = [
@@ -143,8 +192,15 @@ export async function runPipeline(
     ...(loaded.globalDir ? [{ dir: loaded.globalDir }] : []),
     ...(loaded.reviewDir ? [{ dir: loaded.reviewDir }] : []),
   ];
-  const applicable = filterRules(loadRules(ruleSources), diff.files);
+  const allRules = loadRules(ruleSources);
+  const applicable = filterRules(allRules, diff.files);
   const rulesById = new Map(applicable.map((r) => [r.id, r]));
+  // When nothing applies, the run ends in a PASS that reviewed nothing. Naming the
+  // paths and what the catalog actually covers turns that from a mystery into a
+  // one-line answer — without it the user sees only "2 file(s)" and a green result.
+  const coverage = applicable.length === 0
+    ? { paths: diff.files, globs: [...new Set(allRules.flatMap((r) => r.applies_to))].sort() }
+    : undefined;
 
   const reports: ReviewerReport[] = [];
   let costTotal: number | null = null;
@@ -211,6 +267,7 @@ export async function runPipeline(
     skipped: skippedReviewers,
     maxParallel: loaded.config.aggregation.max_parallel,
     rules: applicable.length,
+    coverage,
   });
 
   const before = snapshotGitState(repoRoot);
@@ -278,9 +335,15 @@ export async function runPipeline(
     suppressed = suppression.suppressed;
   }
 
-  const result = aggregate(
+  const aggregated = aggregate(
     aggregateReports, loaded.config.reviewers, rulesById, loaded.config.aggregation.fail_on_severity,
   );
+  // Advisory tier-0 failures annotate the verdict but never change it: the status and
+  // exit code stay whatever the reviewers earned.
+  const result = {
+    ...aggregated,
+    decision_reason: withAdvisoryNote(aggregated.decision_reason, tier0Advisory),
+  };
   const envelope = buildEnvelope({
     repoRoot, commit: diff.head, base: diff.base,
     config: loaded.config, layers: loaded.layers, authMode,

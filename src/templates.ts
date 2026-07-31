@@ -11,8 +11,12 @@ auth:
   mode: auto
 
 # Tier 0: deterministic pre-checks (lint, typecheck, ...) that run before any
-# reviewer spends a token. Sequential, fail-fast — the first non-zero exit (or
-# timeout) fails the whole run with exit code 4 and no reviewer is spawned.
+# reviewer spends a token. Every check runs, so one run reports the complete picture.
+#
+# blocking: true (the default) means a failure fails the whole run with exit code 4
+# and no reviewer is spawned. blocking: false reports the failure and continues —
+# right for checks whose failure says nothing about whether the diff is worth
+# reviewing, like formatting or repo hygiene.
 # tiers:
 #   "0":
 #     checks:
@@ -21,6 +25,7 @@ auth:
 #         timeout_seconds: 120
 #       - id: lint
 #         command: npx eslint .
+#         blocking: false
 
 reviewers:
   # Tier 1 — blocking committee.

@@ -18,6 +18,17 @@ export const Tier0CheckSchema = z.object({
   id: z.string().min(1),
   command: z.string().min(1),
   timeout_seconds: z.number().positive().optional(),
+  /**
+   * Whether failing this check gates the run (exit 4, no reviewer spawned) or is
+   * merely reported. Mirrors the same field on rules, and defaults to `true` for the
+   * same reason global rules default to advisory: a config that predates this field
+   * keeps the gating it already had, rather than silently losing it on upgrade.
+   *
+   * `false` suits checks whose failure says nothing about whether the *diff* is worth
+   * reviewing — repo-hygiene checks like `composer validate` or a formatter, which
+   * routinely fail on pre-existing conditions unrelated to the change under review.
+   */
+  blocking: z.boolean().default(true),
 });
 export type Tier0Check = z.infer<typeof Tier0CheckSchema>;
 

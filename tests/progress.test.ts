@@ -26,6 +26,49 @@ describe('createReporter', () => {
     expect(text()).toContain('skipped (no applicable rules): perf');
   });
 
+  it('names the changed paths, not just how many there were', () => {
+    const { reporter, text } = capture();
+    reporter.diff({
+      mode: 'uncommitted changes', base: 'abc1234', head: 'abc1234', files: 2,
+      paths: ['.gitignore', 'TECHNICAL_DOCUMENTATION.md'],
+    });
+    reporter.done();
+    expect(text()).toContain('.gitignore, TECHNICAL_DOCUMENTATION.md');
+  });
+
+  it('caps a long path list so it cannot bury the message it belongs to', () => {
+    const { reporter, text } = capture();
+    const paths = Array.from({ length: 40 }, (_, i) => `app/File${i}.php`);
+    reporter.diff({ mode: 'range', base: 'a', head: 'b', files: 40, paths });
+    reporter.done();
+    expect(text()).toContain('app/File0.php');
+    expect(text()).toContain('… and 32 more');
+    expect(text()).not.toContain('app/File39.php');
+  });
+
+  it('explains an unmatched diff: which paths, and what the catalog covers', () => {
+    const { reporter, text } = capture();
+    reporter.plan({
+      reviewers: [], skipped: ['security', 'eloquent'], maxParallel: 4, rules: 0,
+      coverage: {
+        paths: ['.gitignore', 'TECHNICAL_DOCUMENTATION.md'],
+        globs: ['app/**/*.php', 'routes/**/*.php'],
+      },
+    });
+    reporter.done();
+    expect(text()).toContain('no catalog rule matched these paths');
+    expect(text()).toContain('.gitignore, TECHNICAL_DOCUMENTATION.md');
+    expect(text()).toContain('this catalog covers: app/**/*.php, routes/**/*.php');
+    expect(text()).toContain('revu doctor');
+  });
+
+  it('falls back to the plain message when there is no coverage detail', () => {
+    const { reporter, text } = capture();
+    reporter.plan({ reviewers: [], skipped: [], maxParallel: 4, rules: 3 });
+    reporter.done();
+    expect(text()).toContain('no reviewers to run (no configured reviewer matched an applicable rule)');
+  });
+
   it('abbreviates a base..head range and collapses base === head to one sha', () => {
     const { reporter, text } = capture();
     reporter.diff({ mode: 'branch commits vs merge base', base: 'a'.repeat(40), head: 'b'.repeat(40), files: 2 });

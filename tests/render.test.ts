@@ -80,11 +80,32 @@ describe('renderPretty', () => {
   it('shows a FAILing tier-0 check', () => {
     const withFailingTier0 = {
       ...envelope,
-      tier_0: { status: 'FAIL' as const, checks: [{ id: 'lint', status: 'FAIL' as const, duration_ms: 50 }] },
+      tier_0: {
+        status: 'FAIL' as const,
+        checks: [{ id: 'lint', status: 'FAIL' as const, blocking: true, duration_ms: 50 }],
+      },
     };
     const output = renderPretty(withFailingTier0, false);
     expect(output).toContain('tier 0: FAIL');
     expect(output).toContain('lint: FAIL (50ms)');
+    expect(output).not.toContain('non-blocking');
+  });
+
+  it('marks a failing non-blocking check without calling the tier a FAIL', () => {
+    const withAdvisory = {
+      ...envelope,
+      tier_0: {
+        status: 'PASS' as const,
+        checks: [
+          { id: 'composer-validate', status: 'FAIL' as const, blocking: false, duration_ms: 50 },
+          { id: 'test', status: 'PASS' as const, blocking: true, duration_ms: 90 },
+        ],
+      },
+    };
+    const output = renderPretty(withAdvisory, false);
+    expect(output).toContain('tier 0: PASS');
+    expect(output).toContain('1 non-blocking failure(s)');
+    expect(output).toContain('composer-validate: FAIL — non-blocking (50ms)');
   });
   it('omits the suppressed line when nothing is suppressed', () => {
     expect(plain).not.toContain('suppressed');
